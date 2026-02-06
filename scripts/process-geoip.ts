@@ -10,8 +10,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Configuration
-const BATCH_SIZE = 2500; // Reduced from 15000 to avoid SQLITE_TOOBIG (limit is ~1MB per statement)
-const MAX_FILE_SIZE = 40 * 1024 * 1024; // 40MB per file
+const BATCH_SIZE = 500; // Reduced from 2500 to 500 to ensure <1MB per statement safety
+const MAX_FILE_SIZE = 25 * 1024 * 1024; // Reduce file size to 25MB to be safe for upload chunks
 const OUTPUT_DIR = path.join(__dirname, '../data');
 const DOWNLOAD_URL = 'https://github.com/P3TERX/GeoLite.mmdb/releases/latest/download/GeoLite2-City.mmdb';
 const MMDB_PATH = path.join(__dirname, '../tmp/GeoLite2-City.mmdb');
