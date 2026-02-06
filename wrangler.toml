@@ -5,7 +5,7 @@ compatibility_date = "2024-02-08"
 [[d1_databases]]
 binding = "DB"
 database_name = "edge-geo-db"
-database_id = "xxxx-xxxx-xxxx-xxxx" # Placeholder, not needed for local dev
+database_id = "9e4ac9a9-f107-43eb-a3a3-ca6aa6ff4c3b"
 
 [observability]
 enabled = true

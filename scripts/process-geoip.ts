@@ -6,74 +6,15 @@ import { Reader } from 'mmdb-lib';
 import axios from 'axios';
 import { fileURLToPath } from 'url';
 
-// Fix for ESM __dirname
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Configuration
 const BATCH_SIZE = 15000; 
-const MAX_FILE_SIZE = 40 * 1024 * 1024; // 40MB per file (safe margin for 100MB limit)
+const MAX_FILE_SIZE = 40 * 1024 * 1024; // 40MB per file
 const OUTPUT_DIR = path.join(__dirname, '../data');
 const DOWNLOAD_URL = 'https://github.com/P3TERX/GeoLite.mmdb/releases/latest/download/GeoLite2-City.mmdb';
-// Use CSV for import? D1 doesn't support direct CSV import via wrangler easily without conversion.
-// However, we can generate a simplified CSV and use a custom bulk loader or just optimize SQL.
-// Better: SQLite binary import is not supported remotely.
-// Optimization:
-// 1. Remove merging logic complexity if it's slow (it's fast enough).
-// 2. Reduce file size: Use integers for lat/lon (multiply by 10000) or drop precision?
-//    We already dropped to 4 decimal places.
-// 3. MAIN ISSUE: `wrangler d1 execute` is slow for massive inserts.
-//    Solution: We should output a pure SQLite dump that can be piped if local,
-//    but for remote D1, we are limited by the HTTP API.
-//    Actually, breaking into smaller chunks (e.g. 5MB) might help reliability, but total time is still high.
-//    
-//    Alternative: Use Cloudflare D1 HTTP API directly with massive batches?
-//    Wrangler does this.
-//
-//    Let's switch to producing a CSV and a separate small script to upload it?
-//    No, wrangler is the standard way.
-//    
-//    Maybe we can reduce the volume of data?
-//    Do we really need ALL cities?
-//    Maybe filtering is key.
-//    
-//    But the user wants "high performance import".
-//    The fastest way for D1 is usually fewer transactions with more rows.
-//    We are already doing 10,000 rows per INSERT.
-//    Maybe 5,000 is safer/faster?
-//    
-//    Let's check if we can export to CSV and use `wrangler d1 execute` with a special command? No.
-//    
-//    Wait, D1 supports importing from a backup (sqlite file)?
-//    Only for creating new databases or restoring.
-//    
-//    Let's stick to SQL but optimize the file structure.
-//    
-//    Actually, we can try to use `sqlite3` locally to create a .sqlite file,
-//    then upload that?
-//    Cloudflare D1 allows "importing" a sqlite database file.
-//    `npx wrangler d1 execute DB --file=./dump.sql` is the way.
-//    
-//    If local import is slow, it's because `wrangler d1 execute --local` goes through the miniflare proxy.
-//    Direct `sqlite3` on the .wrangler/state/v3/d1/DB/db.sqlite would be instant.
-//    
-//    For remote, `wrangler d1 execute` is the only way.
-//    
-//    Let's just ensure the SQL is as compact as possible.
-//    We can remove the column names in INSERT if we are sure of the order.
-//    INSERT INTO geo_locations VALUES ...
-//    
-//    Also, removing `latitude` and `longitude` if they are 0? No, schema requires them.
-//    
-//    Let's try to increase batch size to 20,000?
-//    Limit is usually 100MB payload or similar.
-//    
-//    Let's just change the output format to be cleaner.
 const MMDB_PATH = path.join(__dirname, '../tmp/GeoLite2-City.mmdb');
-
-// Optimization: Use abbreviated INSERT syntax
-// INSERT INTO geo_locations VALUES (...)
-// requires columns in order: start_ip, end_ip, country_code, city_name, latitude, longitude
 
 // Ensure output dir exists
 if (!fs.existsSync(OUTPUT_DIR)) {
@@ -144,8 +85,7 @@ async function processMMDB() {
     });
 
     let currentWriter = getWriter();
-    // Only the first file deletes? No, we are replacing the whole DB logic in workflow.
-    // If we run sequentially, we should probably DELETE in the first file.
+
     if (fileIndex === 1) {
         currentWriter.write('DELETE FROM geo_locations;\n'); 
     }
@@ -158,7 +98,7 @@ async function processMMDB() {
     const r = reader as any;
     const walker = r.walker;
     const nodeCount = reader.metadata.nodeCount;
-    const nodeByteSize = reader.metadata.nodeByteSize; // Need this for offset calculation
+    const nodeByteSize = reader.metadata.nodeByteSize;
 
     console.log('Node Count:', nodeCount);
     console.log('IPv4 Start Node:', r.ipv4StartNodeNumber);
@@ -195,17 +135,9 @@ async function processMMDB() {
     }
 
     // Recursive Walker
-    // ip: bigint representing the start of the range
-    // depth: current bit depth
     function walk(node: number, depth: number, ip: bigint) {
         // Check if we are at a data node (leaf)
         if (node >= nodeCount) {
-            // nodeCount often points to "empty" data in some implementations, 
-            // or explicitly no data. 
-            // Let's try to skip if it seems to be the empty marker.
-            // But we don't know for sure which one is empty without metadata.
-            // However, catching the error is safe.
-            
             try {
                 // Resolve data
                 const data: any = getData(node);
@@ -224,9 +156,6 @@ async function processMMDB() {
                         // Calculate End
                         // Host bits = 128 - depth
                         const hostBits = 128 - depth;
-                        // Max IPv4 host bits is 32. If we are somehow "above" /96 but covering IPv4 space...
-                        // But usually we are deeper than /96 if we are in IPv4 mapped space.
-                        
                         const size = Math.pow(2, hostBits);
                         const endInt = startInt + size - 1;
                         
@@ -259,7 +188,6 @@ async function processMMDB() {
             } catch (e: any) {
                 // Suppress common decoding errors for empty/invalid nodes during full traversal
                 if (e.message && (e.message.includes('Invalid Extended Type') || e.message.includes('Unknown type'))) {
-                    // These are expected when traversing "empty" or special nodes in some MMDB builds
                     return;
                 }
                 console.error(`Error processing node ${node}:`, e);
@@ -268,8 +196,6 @@ async function processMMDB() {
         }
 
         // Branch
-        // Use walker.left / walker.right
-        // Note: walker functions take OFFSET (nodeIndex * nodeByteSize)
         const offset = node * nodeByteSize;
         
         const left = walker.left(offset);
@@ -297,7 +223,6 @@ async function processMMDB() {
     
     if (batch.length > 0) {
         const sql = `INSERT INTO geo_locations VALUES\n${batch.join(',\n')};\n`;
-         // Check size (though it's the last batch, maybe strict check isn't needed, but good for consistency)
          if (currentBytes + Buffer.byteLength(sql) > MAX_FILE_SIZE) {
               currentWriter.close();
               fileIndex++;
@@ -310,7 +235,6 @@ async function processMMDB() {
      // Close final
      currentWriter.close();
     
-    // writer.end(); // appendFileSync handles open/close
     console.log(`Done! Processed ${count} IPv4 records into ${fileIndex} files in ${OUTPUT_DIR}`);
 }
 
