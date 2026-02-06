@@ -137,7 +137,7 @@ function getHtml(data: any, searchIp: string = '') {
         <div class="result-card">
             <div class="ip-display">${data.ip || 'Unknown'}</div>
             <div class="location-display">
-                ${[data.city_name, data.country_code].filter(Boolean).join(', ') || 'Location not found'}
+                ${[data.city_name, data.region_name, data.country_code].filter(Boolean).join(', ') || 'Location not found'}
             </div>
             <pre>${jsonStr}</pre>
             <div class="actions">
@@ -189,7 +189,7 @@ async function lookupIp(db: D1Database, ip: string): Promise<any> {
     // Note: D1 local dev might behave slightly differently, but standard SQL applies.
     // We look for a range where start_ip <= ipInt <= end_ip
     const stmt = db.prepare(`
-        SELECT country_code, city_name, latitude, longitude
+        SELECT country_code, city_name, region_code, region_name, postal_code, timezone, latitude, longitude
         FROM geo_locations
         WHERE ? >= start_ip AND ? <= end_ip
         LIMIT 1

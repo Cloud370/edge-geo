@@ -113,12 +113,26 @@ async function processMMDB() {
     }
 
     // State for merging
-    let lastRecord: { end_ip: number, country: string, city: string, lat: number, lon: number, start_ip: number } | null = null;
+    let lastRecord: { 
+        end_ip: number, 
+        country: string, 
+        city: string, 
+        region_code: string,
+        region_name: string,
+        postal_code: string,
+        timezone: string,
+        lat: number, 
+        lon: number, 
+        start_ip: number 
+    } | null = null;
 
     function flushLastRecord() {
         if (lastRecord) {
-             const { start_ip, end_ip, country, city, lat, lon } = lastRecord;
-             batch.push(`(${start_ip}, ${end_ip}, '${country}', '${city}', ${lat}, ${lon})`);
+             const { start_ip, end_ip, country, city, region_code, region_name, postal_code, timezone, lat, lon } = lastRecord;
+             // Escape single quotes in all text fields
+             const safe = (s: string) => s.replace(/'/g, "''");
+             
+             batch.push(`(${start_ip}, ${end_ip}, '${safe(country)}', '${safe(city)}', '${safe(region_code)}', '${safe(region_name)}', '${safe(postal_code)}', '${safe(timezone)}', ${lat}, ${lon})`);
              count++;
              
              if (batch.length >= BATCH_SIZE) {
@@ -166,7 +180,12 @@ async function processMMDB() {
                         // Sanity check
                         if (startInt >= 0 && endInt <= 4294967295) {
                             const country = data.country?.iso_code || '';
-                            const city = (data.city?.names?.en || '').replace(/'/g, "''");
+                            const city = data.city?.names?.en || '';
+                            const region_code = data.subdivisions?.[0]?.iso_code || '';
+                            const region_name = data.subdivisions?.[0]?.names?.en || '';
+                            const postal_code = data.postal?.code || '';
+                            const timezone = data.location?.time_zone || '';
+                            
                             const lat = data.location?.latitude ? parseFloat(data.location.latitude.toFixed(4)) : 0;
                             const lon = data.location?.longitude ? parseFloat(data.location.longitude.toFixed(4)) : 0;
                             
@@ -176,6 +195,10 @@ async function processMMDB() {
                                     lastRecord.end_ip + 1 === startInt && 
                                     lastRecord.country === country && 
                                     lastRecord.city === city &&
+                                    lastRecord.region_code === region_code &&
+                                    lastRecord.region_name === region_name &&
+                                    lastRecord.postal_code === postal_code &&
+                                    lastRecord.timezone === timezone &&
                                     lastRecord.lat === lat &&
                                     lastRecord.lon === lon) {
                                     // Extend previous record
@@ -183,7 +206,18 @@ async function processMMDB() {
                                 } else {
                                     // Flush old and start new
                                     flushLastRecord();
-                                    lastRecord = { start_ip: startInt, end_ip: endInt, country, city, lat, lon };
+                                    lastRecord = { 
+                                        start_ip: startInt, 
+                                        end_ip: endInt, 
+                                        country, 
+                                        city, 
+                                        region_code,
+                                        region_name,
+                                        postal_code,
+                                        timezone,
+                                        lat, 
+                                        lon 
+                                    };
                                 }
                             }
                         }

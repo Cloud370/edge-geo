@@ -4,6 +4,10 @@ CREATE TABLE geo_locations (
   end_ip INTEGER NOT NULL,
   country_code TEXT,
   city_name TEXT,
+  region_code TEXT,
+  region_name TEXT,
+  postal_code TEXT,
+  timezone TEXT,
   latitude REAL,
   longitude REAL
 );
