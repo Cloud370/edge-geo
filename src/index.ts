@@ -100,13 +100,31 @@ function getHtml(data: any, searchIp: string = '') {
             display: flex;
             gap: 1rem;
         }
-        button {
-            padding: 0.5rem 1rem;
-            cursor: pointer;
+        .api-docs {
+            margin-top: 2rem;
+            text-align: left;
+            background: var(--card-bg);
+            padding: 1.5rem;
+            border-radius: 12px;
+        }
+        .api-docs h2 {
+            margin-top: 0;
+            font-size: 1.5rem;
+        }
+        .endpoint {
+            margin-bottom: 1rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid #ccc;
+        }
+        .endpoint:last-child {
+            border-bottom: none;
+        }
+        code {
             background: #333;
             color: #fff;
-            border: none;
+            padding: 0.2rem 0.4rem;
             border-radius: 4px;
+            font-family: monospace;
         }
     </style>
 </head>
@@ -125,6 +143,29 @@ function getHtml(data: any, searchIp: string = '') {
             <div class="actions">
                 <button onclick="navigator.clipboard.writeText('${data.ip}')">Copy IP</button>
                 <button onclick="navigator.clipboard.writeText(JSON.stringify(${JSON.stringify(data)}))">Copy JSON</button>
+            </div>
+        </div>
+
+        <div class="api-docs">
+            <h2>API Documentation</h2>
+            
+            <div class="endpoint">
+                <h3>Single IP Lookup</h3>
+                <p><strong>GET</strong> <code>/?ip=8.8.8.8</code> or <code>/8.8.8.8</code></p>
+                <p>Returns geolocation data for a single IP address.</p>
+            </div>
+
+            <div class="endpoint">
+                <h3>Batch IP Lookup</h3>
+                <p><strong>POST</strong> <code>/</code></p>
+                <p>Body: JSON Array of IPs</p>
+                <pre style="margin-top:0.5rem">["8.8.8.8", "1.1.1.1"]</pre>
+            </div>
+            
+            <div class="endpoint">
+                <h3>Self Lookup</h3>
+                <p><strong>GET</strong> <code>/</code></p>
+                <p>Returns geolocation for the connecting IP.</p>
             </div>
         </div>
     </div>
@@ -210,12 +251,20 @@ export default {
         if (request.method === 'GET') {
             let targetIp = '';
             
-            // Path: /<IP>
+            // Priority:
+            // 1. Path param: /1.2.3.4
+            // 2. Query param: ?ip=1.2.3.4 (or ?q=1.2.3.4)
+            // 3. Header: CF-Connecting-IP
+
             const pathParts = url.pathname.split('/').filter(Boolean);
+            const queryIp = url.searchParams.get('ip') || url.searchParams.get('q');
+
             if (pathParts.length === 1 && ipToInt(pathParts[0]) !== null) {
                 targetIp = pathParts[0];
+            } else if (queryIp && ipToInt(queryIp) !== null) {
+                targetIp = queryIp;
             } else if (pathParts.length === 0) {
-                // Path: / -> Use connecting IP
+                // Root path -> Use connecting IP
                 const connIp = request.headers.get('CF-Connecting-IP');
                 targetIp = (connIp && ipToInt(connIp) !== null) ? connIp : '127.0.0.1';
             } else {
