@@ -403,7 +403,8 @@ async function lookupIp(db: D1Database, ip: string): Promise<any> {
     const stmt = db.prepare(`
         SELECT country_code, city_name, region_code, region_name, postal_code, timezone, latitude, longitude
         FROM geo_locations
-        WHERE ? >= start_ip AND ? <= end_ip
+        WHERE start_ip <= ? AND end_ip >= ?
+        ORDER BY start_ip DESC
         LIMIT 1
     `).bind(ipInt, ipInt);
 
@@ -419,59 +420,81 @@ async function lookupIp(db: D1Database, ip: string): Promise<any> {
     };
 }
 
+export function calculateBatchChunkSize(maxBoundParams = 100, paramsPerIp = 1): number {
+    return Math.max(1, Math.floor(maxBoundParams / paramsPerIp));
+}
+
 // Database lookup function (Batch)
 async function lookupBatch(db: D1Database, ips: string[]): Promise<any[]> {
-    const validIps = ips.filter(ip => ipToInt(ip) !== null);
-    const invalidIps = ips.filter(ip => ipToInt(ip) === null);
+    const validIps: Array<{ idx: number; ip: string; ipInt: number }> = [];
+    const results: any[] = new Array(ips.length);
+
+    for (let idx = 0; idx < ips.length; idx++) {
+        const ip = ips[idx];
+        const ipInt = ipToInt(ip);
+        if (ipInt === null) results[idx] = { ip, error: 'Invalid IP format' };
+        else validIps.push({ idx, ip, ipInt });
+    }
     
     if (validIps.length === 0) {
-        return invalidIps.map(ip => ({ ip, error: 'Invalid IP format' }));
+        return results.filter(Boolean);
     }
 
     // Process in chunks to respect SQL parameter limits
-    // D1/SQLite limit is often 100s or 1000s, keeping it safe at 100 per chunk
-    const CHUNK_SIZE = 100;
-    const results: any[] = [];
-    
-    // Add invalid IPs to results immediately
-    invalidIps.forEach(ip => results.push({ ip, error: 'Invalid IP format' }));
+    const CHUNK_SIZE = calculateBatchChunkSize();
 
     for (let i = 0; i < validIps.length; i += CHUNK_SIZE) {
         const chunk = validIps.slice(i, i + CHUNK_SIZE);
         
-        // Construct CTE VALUES clause: (?, ?), (?, ?)...
-        const placeholders = chunk.map(() => "(?, ?)").join(", ");
-        const params = chunk.flatMap(ip => [ipToInt(ip)!, ip]);
+        const placeholders = chunk.map(({ idx }) => `(${idx}, ?)`).join(", ");
+        const params = chunk.map(({ ipInt }) => ipInt);
 
         const query = `
-            WITH inputs(ip_int, ip_str) AS (VALUES ${placeholders})
-            SELECT 
-                i.ip_str as ip,
-                g.country_code, g.city_name, g.region_code, g.region_name, 
+            WITH inputs(idx, ip_int) AS (VALUES ${placeholders}),
+            best AS (
+                SELECT
+                    i.idx,
+                    i.ip_int,
+                    (
+                        SELECT rowid
+                        FROM geo_locations g
+                        WHERE g.start_ip <= i.ip_int AND g.end_ip >= i.ip_int
+                        ORDER BY g.start_ip DESC
+                        LIMIT 1
+                    ) AS geo_rowid
+                FROM inputs i
+            )
+            SELECT
+                b.idx as idx,
+                g.country_code, g.city_name, g.region_code, g.region_name,
                 g.postal_code, g.timezone, g.latitude, g.longitude
-            FROM inputs i
-            LEFT JOIN geo_locations g ON i.ip_int >= g.start_ip AND i.ip_int <= g.end_ip
+            FROM best b
+            LEFT JOIN geo_locations g ON g.rowid = b.geo_rowid
         `;
 
         try {
             const { results: chunkResults } = await db.prepare(query).bind(...params).all();
             
-            // Post-process results (handle NULLs from LEFT JOIN)
             chunkResults.forEach((row: any) => {
+                const idx = Number(row.idx);
+                const ip = ips[idx];
                 if (!row.country_code && !row.city_name) {
-                    results.push({ ip: row.ip, error: 'IP not found in database' });
+                    results[idx] = { ip, error: 'IP not found in database' };
                 } else {
-                    results.push(row);
+                    const { idx: _idx, ...rest } = row;
+                    results[idx] = { ip, ...rest };
                 }
             });
         } catch (e) {
             console.error('Batch query error:', e);
             // Fallback to error for this chunk
-            chunk.forEach(ip => results.push({ ip, error: 'Internal database error' }));
+            chunk.forEach(({ idx, ip }) => {
+                results[idx] = { ip, error: 'Internal database error' };
+            });
         }
     }
     
-    return results;
+    return results.filter(Boolean);
 }
 
 
