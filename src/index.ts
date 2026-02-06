@@ -395,14 +395,11 @@ function getHtml(data: any, searchIp: string = '') {
 </html>`;
 }
 
-// Database lookup function
+// Database lookup function (Single)
 async function lookupIp(db: D1Database, ip: string): Promise<any> {
     const ipInt = ipToInt(ip);
     if (ipInt === null) return { ip, error: 'Invalid IP format' };
 
-    // Query D1
-    // Note: D1 local dev might behave slightly differently, but standard SQL applies.
-    // We look for a range where start_ip <= ipInt <= end_ip
     const stmt = db.prepare(`
         SELECT country_code, city_name, region_code, region_name, postal_code, timezone, latitude, longitude
         FROM geo_locations
@@ -421,6 +418,62 @@ async function lookupIp(db: D1Database, ip: string): Promise<any> {
         ...result
     };
 }
+
+// Database lookup function (Batch)
+async function lookupBatch(db: D1Database, ips: string[]): Promise<any[]> {
+    const validIps = ips.filter(ip => ipToInt(ip) !== null);
+    const invalidIps = ips.filter(ip => ipToInt(ip) === null);
+    
+    if (validIps.length === 0) {
+        return invalidIps.map(ip => ({ ip, error: 'Invalid IP format' }));
+    }
+
+    // Process in chunks to respect SQL parameter limits
+    // D1/SQLite limit is often 100s or 1000s, keeping it safe at 100 per chunk
+    const CHUNK_SIZE = 100;
+    const results: any[] = [];
+    
+    // Add invalid IPs to results immediately
+    invalidIps.forEach(ip => results.push({ ip, error: 'Invalid IP format' }));
+
+    for (let i = 0; i < validIps.length; i += CHUNK_SIZE) {
+        const chunk = validIps.slice(i, i + CHUNK_SIZE);
+        
+        // Construct CTE VALUES clause: (?, ?), (?, ?)...
+        const placeholders = chunk.map(() => "(?, ?)").join(", ");
+        const params = chunk.flatMap(ip => [ipToInt(ip)!, ip]);
+
+        const query = `
+            WITH inputs(ip_int, ip_str) AS (VALUES ${placeholders})
+            SELECT 
+                i.ip_str as ip,
+                g.country_code, g.city_name, g.region_code, g.region_name, 
+                g.postal_code, g.timezone, g.latitude, g.longitude
+            FROM inputs i
+            LEFT JOIN geo_locations g ON i.ip_int >= g.start_ip AND i.ip_int <= g.end_ip
+        `;
+
+        try {
+            const { results: chunkResults } = await db.prepare(query).bind(...params).all();
+            
+            // Post-process results (handle NULLs from LEFT JOIN)
+            chunkResults.forEach((row: any) => {
+                if (!row.country_code && !row.city_name) {
+                    results.push({ ip: row.ip, error: 'IP not found in database' });
+                } else {
+                    results.push(row);
+                }
+            });
+        } catch (e) {
+            console.error('Batch query error:', e);
+            // Fallback to error for this chunk
+            chunk.forEach(ip => results.push({ ip, error: 'Internal database error' }));
+        }
+    }
+    
+    return results;
+}
+
 
 // Helper: Remove null values from object
 function cleanJson(obj: any): any {
@@ -461,14 +514,22 @@ export default {
                 let ips: string[] = [];
                 
                 if (Array.isArray(body)) {
-                    ips = body;
+                    ips = body.map(String).map(s => s.trim());
                 } else if (body && Array.isArray(body.ips)) {
-                    ips = body.ips;
+                    ips = body.ips.map(String).map((s: string) => s.trim());
                 } else {
                     return new Response('Invalid JSON body', { status: 400, headers: corsHeaders });
                 }
+                
+                // Limit batch size to prevent abuse and timeout
+                if (ips.length > 10000) {
+                    return new Response('Batch limit exceeded (max 10000)', { status: 400, headers: corsHeaders });
+                }
 
-                const results = await Promise.all(ips.map(ip => lookupIp(env.DB, ip)));
+                // Optimization: Use SQL CTE for batch lookup
+                // This reduces DB round-trips from N to N/100
+                const results = await lookupBatch(env.DB, ips);
+                
                 return Response.json(cleanJson(results), { headers: corsHeaders });
             } catch (e) {
                 return new Response('Error processing request', { status: 500, headers: corsHeaders });
