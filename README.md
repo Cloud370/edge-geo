@@ -1,50 +1,56 @@
 # Edge Geo
 
-An IP Geolocation service running on Cloudflare Workers and D1, powered by MaxMind GeoLite2 data.
+[English](README_EN.md) | **中文**
 
-## Features
+基于 Cloudflare Workers 和 D1 的 IP 地理位置查询服务，数据源来自 MaxMind GeoLite2。
 
-- **Serverless**: Runs on Cloudflare Workers edge network.
-- **Fast**: Uses D1 (SQLite) for efficient IP range lookups.
-- **Automated Updates**: GitHub Actions workflow automatically fetches and updates the database weekly.
-- **Dual Interface**:
-  - **JSON API**: For programmatic access (Single & Batch).
-  - **Web UI**: Simple HTML interface for human use.
+## 特性
 
-## API Usage
+- **Serverless**: 运行在 Cloudflare Workers 边缘网络上。
+- **快速**: 使用 D1 (SQLite) 进行高效的 IP 范围查找。
+- **自动更新**: GitHub Actions 工作流每周自动下载并更新数据库。
+- **双重接口**:
+  - **JSON API**: 供程序调用 (支持单 IP 和批量查询)。
+  - **Web UI**: 简单的人性化查询页面。
 
-### 1. Single IP Lookup
+## API 使用文档
 
-**GET** `/?ip=<ip_address>` or `/<ip_address>`
+### 1. 单个 IP 查询
+
+**GET** `/?ip=<ip_address>` 或 `/<ip_address>`
 
 ```bash
 curl "https://your-worker.workers.dev/?ip=8.8.8.8"
-# OR
+# 或者
 curl "https://your-worker.workers.dev/8.8.8.8"
 ```
 
-**Response:**
+**返回结果:**
 ```json
 {
   "ip": "8.8.8.8",
   "country_code": "US",
   "city_name": "",
-  "latitude": 37.751,
-  "longitude": -97.822
+  "region_code": "VA",
+  "region_name": "Virginia",
+  "postal_code": "20149",
+  "timezone": "America/New_York",
+  "latitude": 39.03,
+  "longitude": -77.5
 }
 ```
 
-### 2. Self Lookup
+### 2. 查询自身 IP
 
-**GET** `/` (without parameters)
+**GET** `/` (不带任何参数)
 
-Returns the location of the connecting client.
+返回发起请求客户端的地理位置信息。
 
-### 3. Batch Lookup
+### 3. 批量查询
 
 **POST** `/`
 
-**Body:** JSON Array of IP strings.
+**Body:** JSON 格式的 IP 字符串数组。
 
 ```bash
 curl -X POST "https://your-worker.workers.dev/" \
@@ -52,77 +58,85 @@ curl -X POST "https://your-worker.workers.dev/" \
   -d '["8.8.8.8", "1.1.1.1"]'
 ```
 
-**Response:**
+**返回结果:**
 ```json
 [
   {
     "ip": "8.8.8.8",
     "country_code": "US",
     "city_name": "",
-    "latitude": 37.751,
-    "longitude": -97.822
+    "region_code": "VA",
+    "region_name": "Virginia",
+    "postal_code": "20149",
+    "timezone": "America/New_York",
+    "latitude": 39.03,
+    "longitude": -77.5
   },
   {
     "ip": "1.1.1.1",
     "country_code": "AU",
     "city_name": "",
+    "region_code": "NSW",
+    "region_name": "New South Wales",
+    "postal_code": "2835",
+    "timezone": "Australia/Sydney",
     "latitude": -33.494,
     "longitude": 143.2104
   }
 ]
 ```
 
-## Development
+## 开发指南
 
-### Prerequisites
+### 前置要求
 
 - Node.js & npm
 - Cloudflare Wrangler CLI (`npm i -g wrangler`)
 
-### Local Setup
+### 本地环境搭建
 
-1. **Install Dependencies**
+1. **安装依赖**
    ```bash
    npm install
    ```
 
-2. **Initialize Local Database**
+2. **初始化本地数据库**
    ```bash
-   npx wrangler d1 create edge-geo-db # If creating new
+   npx wrangler d1 create edge-geo-db # 如果是首次创建
    npx wrangler d1 execute edge-geo-db --local --file=migrations/0000_schema.sql
    ```
 
-3. **Import Data Locally** (Optional, for testing)
+3. **本地导入数据** (可选，用于测试)
    ```bash
-   # Download and process GeoIP data (this will generate SQL files in data/)
+   # 下载并处理 GeoIP 数据 (这将生成 SQL 文件到 data/ 目录)
    npx tsx scripts/process-geoip.ts
    
-   # Import to local D1
+   # 导入到本地 D1 数据库
    npx tsx scripts/local-import.ts
    ```
 
-4. **Run Dev Server**
+4. **启动开发服务器**
    ```bash
    npm run dev
    ```
 
-## Deployment
+## 部署指南
 
-1. **Configure Wrangler**
-   Update `wrangler.toml` with your D1 `database_id`.
+1. **配置 Wrangler**
+   在 `wrangler.toml` 中更新您的 D1 `database_id`。
 
-2. **Deploy**
+2. **部署**
    ```bash
    npm run deploy
    ```
 
-3. **Automated Updates**
-   Set up the following Secrets in your GitHub Repository:
+3. **配置自动更新**
+   在 GitHub 仓库的 Secrets 中设置以下变量：
    - `CLOUDFLARE_API_TOKEN`
    - `CLOUDFLARE_ACCOUNT_ID`
 
-   The workflow `.github/workflows/update-db.yml` will run weekly to keep the database fresh.
+   `.github/workflows/update-db.yml` 工作流将每周运行一次，保持数据库为最新状态。
 
-## License
+## 许可证
 
-This product includes GeoLite2 data created by MaxMind, available from [https://www.maxmind.com](https://www.maxmind.com).
+本产品包含由 MaxMind 创建的 GeoLite2 数据，可从 [https://www.maxmind.com](https://www.maxmind.com) 获取。
