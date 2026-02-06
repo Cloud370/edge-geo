@@ -91,7 +91,23 @@ async function processMMDB() {
     let currentWriter = getWriter();
 
     if (fileIndex === 1) {
-        currentWriter.write('DELETE FROM geo_locations;\n'); 
+        // Recreate table to ensure correct column order
+        currentWriter.write(`
+DROP TABLE IF EXISTS geo_locations;
+CREATE TABLE geo_locations (
+  start_ip INTEGER NOT NULL,
+  end_ip INTEGER NOT NULL,
+  country_code TEXT,
+  city_name TEXT,
+  region_code TEXT,
+  region_name TEXT,
+  postal_code TEXT,
+  timezone TEXT,
+  latitude REAL,
+  longitude REAL
+);
+CREATE INDEX idx_geo_locations_ip ON geo_locations (start_ip, end_ip);
+`); 
     }
     
     let batch: string[] = [];
@@ -129,14 +145,11 @@ async function processMMDB() {
     function flushLastRecord() {
         if (lastRecord) {
              const { start_ip, end_ip, country, city, region_code, region_name, postal_code, timezone, lat, lon } = lastRecord;
-             // Optimization: Remove empty strings to save space
-             // Use NULL for empty strings in SQL? No, schema is TEXT.
-             // But we can just use empty strings.
-             // The main optimization is removing column names in INSERT (already done).
              
              // Escape single quotes
              const safe = (s: string) => s.replace(/'/g, "''");
              
+             // Schema order: start_ip, end_ip, country_code, city_name, region_code, region_name, postal_code, timezone, latitude, longitude
              batch.push(`(${start_ip}, ${end_ip}, '${safe(country)}', '${safe(city)}', '${safe(region_code)}', '${safe(region_name)}', '${safe(postal_code)}', '${safe(timezone)}', ${lat}, ${lon})`);
              count++;
              
