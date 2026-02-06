@@ -2,7 +2,17 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 
-const DB_PATH = '.wrangler/state/v3/d1/miniflare-D1DatabaseObject/36a0ba9080c97145a485b182534d9b8124d885b500e6390474e5648cfa0a131d.sqlite';
+const DB_PATH = (() => {
+    const baseDir = '.wrangler/state/v3/d1/miniflare-D1DatabaseObject';
+    if (!fs.existsSync(baseDir)) return '';
+    const files = fs.readdirSync(baseDir).filter(f => f.endsWith('.sqlite'));
+    if (files.length === 0) return '';
+    // Return the most recently modified file
+    return path.join(baseDir, files.sort((a, b) => {
+        return fs.statSync(path.join(baseDir, b)).mtime.getTime() - 
+               fs.statSync(path.join(baseDir, a)).mtime.getTime();
+    })[0]);
+})();
 
 async function main() {
   if (!fs.existsSync(DB_PATH)) {
@@ -34,13 +44,13 @@ async function main() {
     
     const startTime = Date.now();
     try {
-        // better-sqlite3 handles transactions if the SQL file has them, 
-        // but it's safer to wrap it here if the file doesn't have them, 
-        // or just execute the big string.
-        // Our generated files have BEGIN and COMMIT.
+        // Wrap in transaction for performance since we removed them from the files
+        db.exec('BEGIN TRANSACTION');
         db.exec(sql);
+        db.exec('COMMIT');
         console.log(`  -> Done in ${(Date.now() - startTime) / 1000}s`);
     } catch (err) {
+        try { db.exec('ROLLBACK'); } catch (e) {}
         console.error(`  -> Error importing ${file}:`, err);
     }
   }
