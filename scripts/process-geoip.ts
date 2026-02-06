@@ -64,7 +64,8 @@ async function processMMDB() {
          const filePath = path.join(OUTPUT_DIR, fileName);
          
          // Use WriteStream for better performance (avoids open/close on every write)
-         const stream = fs.createWriteStream(filePath, { flags: 'w' });
+         // Increase highWaterMark to 1MB to reduce buffer flushing overhead
+         const stream = fs.createWriteStream(filePath, { flags: 'w', highWaterMark: 1024 * 1024 });
          
          return {
              path: filePath,
@@ -128,6 +129,10 @@ CREATE INDEX idx_geo_locations_ip ON geo_locations (start_ip, end_ip);
         return r.resolveDataPointer(ptr);
     }
 
+    // Optimization: Pre-compile constants
+    const IPv4_START = 281470681743360n; // ::ffff:0:0
+    const IPv4_END = 281474976710655n;   // ::ffff:255.255.255.255
+
     // State for merging
     let lastRecord: { 
         end_ip: number, 
@@ -146,8 +151,8 @@ CREATE INDEX idx_geo_locations_ip ON geo_locations (start_ip, end_ip);
         if (lastRecord) {
              const { start_ip, end_ip, country, city, region_code, region_name, postal_code, timezone, lat, lon } = lastRecord;
              
-             // Escape single quotes
-             const safe = (s: string) => s.replace(/'/g, "''");
+             // Escape single quotes - optimized to check first
+             const safe = (s: string) => s.includes("'") ? s.replace(/'/g, "''") : s;
              
              // Schema order: start_ip, end_ip, country_code, city_name, region_code, region_name, postal_code, timezone, latitude, longitude
              batch.push(`(${start_ip}, ${end_ip}, '${safe(country)}', '${safe(city)}', '${safe(region_code)}', '${safe(region_name)}', '${safe(postal_code)}', '${safe(timezone)}', ${lat}, ${lon})`);
@@ -182,112 +187,121 @@ CREATE INDEX idx_geo_locations_ip ON geo_locations (start_ip, end_ip);
         }
     }
 
-    // Recursive Walker
-    function walk(node: number, depth: number, ip: bigint) {
-        // Check if we are at a data node (leaf)
-        if (node >= nodeCount) {
-            try {
-                // Resolve data
-                const data: any = getData(node);
-                
-                // Check if it has City/Country data
-                if (data && (data.country || data.city)) {
-                    // IPv4 Filter Logic
-                    const IPv4_START = 281470681743360n; // ::ffff:0:0
-                    const IPv4_END = 281474976710655n;   // ::ffff:255.255.255.255
+    // Iterative Walker
+    async function walk(startNode: number, startDepth: number, startIp: bigint) {
+        const stack: { node: number; depth: number; ip: bigint }[] = [];
+        stack.push({ node: startNode, depth: startDepth, ip: startIp });
+
+        let processedCount = 0;
+
+        while (stack.length > 0) {
+            const { node, depth, ip } = stack.pop()!;
+
+            // Yield to event loop every 10000 nodes to allow I/O flushing
+            if (++processedCount % 10000 === 0) {
+                await new Promise(resolve => setImmediate(resolve));
+            }
+
+            // Check if we are at a data node (leaf)
+            if (node >= nodeCount) {
+                try {
+                    // Resolve data
+                    const data: any = getData(node);
                     
-                    if (ip >= IPv4_START && ip <= IPv4_END) {
-                        // It is IPv4
-                        const startBig = ip - IPv4_START;
-                        const startInt = Number(startBig);
-                        
-                        // Calculate End
-                        // Host bits = 128 - depth
-                        const hostBits = 128 - depth;
-                        const size = Math.pow(2, hostBits);
-                        const endInt = startInt + size - 1;
-                        
-                        // Sanity check
-                        if (startInt >= 0 && endInt <= 4294967295) {
-                            const country = data.country?.iso_code || '';
-                            const city = data.city?.names?.en || '';
-                            const region_code = data.subdivisions?.[0]?.iso_code || '';
-                            const region_name = data.subdivisions?.[0]?.names?.en || '';
-                            const postal_code = data.postal?.code || '';
-                            const timezone = data.location?.time_zone || '';
+                    // Check if it has City/Country data
+                    if (data && (data.country || data.city)) {
+                        // IPv4 Filter Logic
+                        if (ip >= IPv4_START && ip <= IPv4_END) {
+                            // It is IPv4
+                            const startBig = ip - IPv4_START;
+                            const startInt = Number(startBig);
                             
-                            const lat = data.location?.latitude ? parseFloat(data.location.latitude.toFixed(4)) : 0;
-                            const lon = data.location?.longitude ? parseFloat(data.location.longitude.toFixed(4)) : 0;
+                            // Calculate End
+                            // Host bits = 128 - depth
+                            const hostBits = 128 - depth;
+                            const size = Math.pow(2, hostBits);
+                            const endInt = startInt + size - 1;
                             
-                            if (country || city) {
-                                // Merge logic
-                                if (lastRecord && 
-                                    lastRecord.end_ip + 1 === startInt && 
-                                    lastRecord.country === country && 
-                                    lastRecord.city === city &&
-                                    lastRecord.region_code === region_code &&
-                                    lastRecord.region_name === region_name &&
-                                    lastRecord.postal_code === postal_code &&
-                                    lastRecord.timezone === timezone &&
-                                    lastRecord.lat === lat &&
-                                    lastRecord.lon === lon) {
-                                    // Extend previous record
-                                    lastRecord.end_ip = endInt;
-                                } else {
-                                    // Flush old and start new
-                                    flushLastRecord();
-                                    lastRecord = { 
-                                        start_ip: startInt, 
-                                        end_ip: endInt, 
-                                        country, 
-                                        city, 
-                                        region_code,
-                                        region_name,
-                                        postal_code,
-                                        timezone,
-                                        lat, 
-                                        lon 
-                                    };
+                            // Sanity check
+                            if (startInt >= 0 && endInt <= 4294967295) {
+                                const country = data.country?.iso_code || '';
+                                const city = data.city?.names?.en || '';
+                                const region_code = data.subdivisions?.[0]?.iso_code || '';
+                                const region_name = data.subdivisions?.[0]?.names?.en || '';
+                                const postal_code = data.postal?.code || '';
+                                const timezone = data.location?.time_zone || '';
+                                
+                                // Optimization: Math.round is faster than toFixed() string conversion
+                                const lat = data.location?.latitude ? Math.round(data.location.latitude * 10000) / 10000 : 0;
+                                const lon = data.location?.longitude ? Math.round(data.location.longitude * 10000) / 10000 : 0;
+                                
+                                if (country || city) {
+                                    // Merge logic
+                                    if (lastRecord && 
+                                        lastRecord.end_ip + 1 === startInt && 
+                                        lastRecord.country === country && 
+                                        lastRecord.city === city &&
+                                        lastRecord.region_code === region_code &&
+                                        lastRecord.region_name === region_name &&
+                                        lastRecord.postal_code === postal_code &&
+                                        lastRecord.timezone === timezone &&
+                                        lastRecord.lat === lat &&
+                                        lastRecord.lon === lon) {
+                                        // Extend previous record
+                                        lastRecord.end_ip = endInt;
+                                    } else {
+                                        // Flush old and start new
+                                        await flushLastRecord();
+                                        lastRecord = { 
+                                            start_ip: startInt, 
+                                            end_ip: endInt, 
+                                            country, 
+                                            city, 
+                                            region_code,
+                                            region_name,
+                                            postal_code,
+                                            timezone,
+                                            lat, 
+                                            lon 
+                                        };
+                                    }
                                 }
                             }
                         }
                     }
+                } catch (e: any) {
+                    // Suppress common decoding errors for empty/invalid nodes during full traversal
+                    if (e.message && (e.message.includes('Invalid Extended Type') || e.message.includes('Unknown type'))) {
+                        continue;
+                    }
+                    console.error(`Error processing node ${node}:`, e);
                 }
-            } catch (e: any) {
-                // Suppress common decoding errors for empty/invalid nodes during full traversal
-                if (e.message && (e.message.includes('Invalid Extended Type') || e.message.includes('Unknown type'))) {
-                    return;
-                }
-                console.error(`Error processing node ${node}:`, e);
+                continue;
             }
-            return;
-        }
 
-        // Branch
-        const offset = node * nodeByteSize;
-        
-        const left = walker.left(offset);
-        const right = walker.right(offset);
-        
-        // Left (0)
-        walk(left, depth + 1, ip);
-        
-        // Right (1)
-        const bitVal = 1n << BigInt(127 - depth);
-        walk(right, depth + 1, ip | bitVal);
+            // Branch
+            const offset = node * nodeByteSize;
+            
+            const left = walker.left(offset);
+            const right = walker.right(offset);
+            
+            // Push Right first so Left is popped first (DFS order preserved)
+            const bitVal = 1n << BigInt(127 - depth);
+            stack.push({ node: right, depth: depth + 1, ip: ip | bitVal });
+            stack.push({ node: left, depth: depth + 1, ip });
+        }
     }
 
     console.log('Walking tree...');
     if (r.ipv4StartNodeNumber) {
         console.log('Starting from IPv4 root...');
-        const IPv4_START = 281470681743360n; // ::ffff:0:0
-        walk(r.ipv4StartNodeNumber, 96, IPv4_START);
+        await walk(r.ipv4StartNodeNumber, 96, IPv4_START);
     } else {
-        walk(0, 0, 0n);
+        await walk(0, 0, 0n);
     }
     
     // Flush final record
-    flushLastRecord();
+    await flushLastRecord();
     
     if (batch.length > 0) {
         const sql = `INSERT INTO geo_locations VALUES\n${batch.join(',\n')};\n`;

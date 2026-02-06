@@ -20,9 +20,9 @@ An IP Geolocation service running on Cloudflare Workers and D1, powered by MaxMi
 **GET** `/?ip=<ip_address>` or `/<ip_address>`
 
 ```bash
-curl "https://your-worker.workers.dev/?ip=8.8.8.8"
+curl "https://edge-geo.y8955.workers.dev/?ip=8.8.8.8"
 # OR
-curl "https://your-worker.workers.dev/8.8.8.8"
+curl "https://edge-geo.y8955.workers.dev/8.8.8.8"
 ```
 
 **Response:**
@@ -53,7 +53,7 @@ Returns the location of the connecting client.
 **Body:** JSON Array of IP strings.
 
 ```bash
-curl -X POST "https://your-worker.workers.dev/" \
+curl -X POST "https://edge-geo.y8955.workers.dev/" \
   -H "Content-Type: application/json" \
   -d '["8.8.8.8", "1.1.1.1"]'
 ```

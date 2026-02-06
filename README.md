@@ -20,9 +20,9 @@
 **GET** `/?ip=<ip_address>` 或 `/<ip_address>`
 
 ```bash
-curl "https://your-worker.workers.dev/?ip=8.8.8.8"
+curl "https://edge-geo.y8955.workers.dev/?ip=8.8.8.8"
 # 或者
-curl "https://your-worker.workers.dev/8.8.8.8"
+curl "https://edge-geo.y8955.workers.dev/8.8.8.8"
 ```
 
 **返回结果:**
@@ -53,7 +53,7 @@ curl "https://your-worker.workers.dev/8.8.8.8"
 **Body:** JSON 格式的 IP 字符串数组。
 
 ```bash
-curl -X POST "https://your-worker.workers.dev/" \
+curl -X POST "https://edge-geo.y8955.workers.dev/" \
   -H "Content-Type: application/json" \
   -d '["8.8.8.8", "1.1.1.1"]'
 ```
