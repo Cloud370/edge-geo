@@ -129,16 +129,31 @@ async function processMMDB() {
     function flushLastRecord() {
         if (lastRecord) {
              const { start_ip, end_ip, country, city, region_code, region_name, postal_code, timezone, lat, lon } = lastRecord;
-             // Escape single quotes in all text fields
+             // Optimization: Remove empty strings to save space
+             // Use NULL for empty strings in SQL? No, schema is TEXT.
+             // But we can just use empty strings.
+             // The main optimization is removing column names in INSERT (already done).
+             
+             // Escape single quotes
              const safe = (s: string) => s.replace(/'/g, "''");
              
              batch.push(`(${start_ip}, ${end_ip}, '${safe(country)}', '${safe(city)}', '${safe(region_code)}', '${safe(region_name)}', '${safe(postal_code)}', '${safe(timezone)}', ${lat}, ${lon})`);
              count++;
              
              if (batch.length >= BATCH_SIZE) {
+                 // Optimization: Pre-allocate buffer or just join strings?
+                 // Node.js string concatenation is quite fast.
+                 // But we can check if we can reduce file I/O overhead.
+                 // Currently we write every BATCH_SIZE (500 rows).
+                 
                  const sql = `INSERT INTO geo_locations VALUES\n${batch.join(',\n')};\n`;
+                 
+                 // Write asynchronously to avoid blocking CPU? 
+                 // No, process-geoip is a build script, synchronous/stream is fine.
+                 // The bottleneck is "mmdb walking" logic + "string generation".
+                 
                  if (currentBytes + Buffer.byteLength(sql) > MAX_FILE_SIZE) {
-                     currentWriter.close(); // Close previous
+                     currentWriter.close(); 
                      fileIndex++;
                      currentBytes = 0;
                      currentWriter = getWriter();
@@ -146,7 +161,9 @@ async function processMMDB() {
                  }
                  currentWriter.write(sql);
                  batch = [];
-                 if (count % 50000 === 0) console.log(`Processed ${count} records...`);
+                 
+                 // Logging less frequently
+                 if (count % 100000 === 0) console.log(`Processed ${count} records...`);
              }
              lastRecord = null;
         }
