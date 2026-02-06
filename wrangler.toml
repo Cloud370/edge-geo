@@ -1,0 +1,11 @@
+name = "edge-geo"
+main = "src/index.ts"
+compatibility_date = "2024-02-08"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "edge-geo-db"
+database_id = "xxxx-xxxx-xxxx-xxxx" # Placeholder, not needed for local dev
+
+[observability]
+enabled = true

@@ -1,0 +1,16 @@
+# Node modules
+node_modules/
+npm-debug.log
+
+# Cloudflare Wrangler
+.wrangler/
+.dev.vars
+
+# Temporary files
+tmp/
+data/
+!data/.keep
+
+# OS generated files
+.DS_Store
+Thumbs.db
