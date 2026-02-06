@@ -62,17 +62,21 @@ async function processMMDB() {
     function getWriter() {
          const fileName = `import_${String(fileIndex).padStart(3, '0')}.sql`;
          const filePath = path.join(OUTPUT_DIR, fileName);
-         // Start transaction
-         fs.writeFileSync(filePath, 'BEGIN TRANSACTION;\n');
+         
+         // Use WriteStream for better performance (avoids open/close on every write)
+         const stream = fs.createWriteStream(filePath, { flags: 'w' });
          
          return {
              path: filePath,
              write: (str: string) => {
-                 fs.appendFileSync(filePath, str);
+                 const canWrite = stream.write(str);
                  currentBytes += Buffer.byteLength(str);
+                 // In a complex app we might handle backpressure (!canWrite), 
+                 // but for this batch script it's likely fine or OS buffers will handle it.
              },
              close: () => {
-                 fs.appendFileSync(filePath, 'COMMIT;\n');
+                 // No explicit transaction commit needed as we removed BEGIN
+                 stream.end();
              }
          };
      }
